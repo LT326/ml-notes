@@ -16,6 +16,19 @@
   - 验证方式：① 检查映射是否只由训练折算出；② 与“全量算目标编码”的泄露版对比分数。
 
 运行： python q6_column_transformer_pipeline.py
+
+============================================================
+【阅读指南】本文件按“需掌握程度”做了三级标注：
+    ★★★ 必掌握   —— 数据处理核心考点，要能自己讲清原理
+    ★★  工程规范 —— 工程化的正确写法，重点理解“为什么”
+    ★   脚手架   —— 造数据、打印排版；读代码时可跳过
+
+本题的 ★★★ 必掌握清单：
+    1. 自定义 Transformer 的三个方法：fit / fit_transform / transform 各干什么
+    2. fit 只用“折内数据”，fit_transform 返回 out-of-fold 编码 —— 防泄露的核心
+    3. 未见过的新类别要能优雅回退（本题回退到全局均值）
+    4. ColumnTransformer 如何把数值列 / 低基数列 / 高基数列分而治之
+============================================================
 """
 
 from __future__ import annotations
@@ -39,9 +52,16 @@ TARGET = "default"
 SMOOTH_M = 30
 
 
-# --------------------------------------------------------------------------
-# 自定义 Transformer：高基数类别 -> 平滑 + K 折交叉目标编码
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：自定义 Transformer 的防泄露写法（本文件最重要的一段）
+#   关键在三个方法各司其职：
+#     fit(X, y)           -> 只用传入数据（CV 时即“折内训练数据”）学一份全量映射；
+#     fit_transform(X, y) -> 返回 K 折 out-of-fold 编码，每行的编码不含自己的标签；
+#     transform(X)        -> 查表编码；未见过的类别回退到全局均值。
+#   只要遵守“fit 绝不碰外部数据”，这个组件塞进 Pipeline 后就是安全的。
+# ★★ 工程规范：继承 BaseEstimator + TransformerMixin + 重写这三个方法，
+#   是 sklearn 自定义预处理的标准范式，可以当模板套到别的清洗步骤上。
+# ==========================================================================
 class SmoothedTargetEncoder(BaseEstimator, TransformerMixin):
     """平滑目标编码器（单列），实现防泄露的 fit / fit_transform / transform。"""
 
@@ -52,6 +72,7 @@ class SmoothedTargetEncoder(BaseEstimator, TransformerMixin):
         self.random_state = random_state
 
     def _smooth(self, keys: pd.Series, y: pd.Series) -> tuple[dict, float]:
+        # ★★★ 必掌握：平滑公式 —— 样本越少的类别，越向全局均值收缩
         gm = float(y.mean())
         stat = pd.DataFrame({"k": keys.values, "y": y.values}).groupby("k")["y"].agg(["mean", "count"])
         mapping = (stat["count"] * stat["mean"] + self.m * gm) / (stat["count"] + self.m)
@@ -79,9 +100,10 @@ class SmoothedTargetEncoder(BaseEstimator, TransformerMixin):
         return np.where(np.isnan(out), self.global_mean_, out).reshape(-1, 1)
 
 
-# --------------------------------------------------------------------------
-# 数据构造
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★ 脚手架（可跳过）：造一份含三类列（数值 / 低基数 / 高基数）的数据
+#   只负责提供素材，随机数公式不是知识点。
+# ==========================================================================
 def build_data(n: int = 3000) -> pd.DataFrame:
     merchants = [f"M{i:04d}" for i in range(200)]          # 高基数：200 个商户
     merchant_bias = RNG.normal(0, 1.5, size=len(merchants))
@@ -109,9 +131,14 @@ def build_data(n: int = 3000) -> pd.DataFrame:
     return df
 
 
-# --------------------------------------------------------------------------
-# 预处理流水线
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★ 工程规范：ColumnTransformer 把三类列“分而治之”
+#   数值列   -> 中位数填充 + 标准化
+#   低基数列 -> 众数填充 + 独热
+#   高基数列 -> 自定义目标编码器（防泄露的关键）
+#   一个对象管三套流程，这是真实项目的标准写法。
+#   对照版 use_custom_encoder=False：用“全量算好的泄露特征”替换，模拟错误做法。
+# ==========================================================================
 def build_preprocessor(use_custom_encoder: bool = True) -> ColumnTransformer:
     num_pipe = Pipeline([("imputer", SimpleImputer(strategy="median")), ("scaler", StandardScaler())])
     low_pipe = Pipeline(
@@ -127,6 +154,8 @@ def build_preprocessor(use_custom_encoder: bool = True) -> ColumnTransformer:
     )
 
 
+# ★ 脚手架：main 负责跑“正确流水线 vs 泄露对照”并打印分数，流程可扫过；
+#   重点是 ③ “验证映射只来自训练折”那段，它是防泄露的硬证据
 def main() -> None:
     df = build_data()
     print("=" * 72)
@@ -141,6 +170,7 @@ def main() -> None:
     y = df[TARGET].to_numpy()
     clf = LogisticRegression(max_iter=3000)
 
+    # ★★★ 必掌握：正确做法 —— 目标编码留在 Pipeline 内，由 cross_val_score 折内 fit
     # ---- 正确流水线 ----
     pipe = Pipeline([("prep", build_preprocessor(use_custom_encoder=True)), ("clf", clf)])
     scores = cross_val_score(pipe, X, y, cv=5, scoring="accuracy", n_jobs=1)
@@ -149,6 +179,7 @@ def main() -> None:
     print("=" * 72)
     print(f"5 折准确率 : {scores.mean():.4f} ± {scores.std():.4f}")
 
+    # ★ 对照（反面教材）：在全量数据上先算好目标编码，再当作普通数值特征 —— 这就是泄露
     # ---- 泄露对照：全量算目标编码后当作普通数值特征 ----
     df_leak = X.copy()
     gm = y.mean()
@@ -164,6 +195,8 @@ def main() -> None:
     print(f"5 折准确率 : {scores_leak.mean():.4f} ± {scores_leak.std():.4f}")
     print(f"→ 泄露版虚高：{(scores_leak.mean() - scores.mean()) * 100:+.2f} 个百分点")
 
+    # ★★ 工程规范：验证思路 —— 把 Transformer 学到的映射，和“只用训练折手算的映射”
+    #   逐一比对；再和“全量手算的映射”比对，不一致就证明 fit 确实没用全量数据。
     # ---- 硬核验证：映射只由训练折算出 ----
     print("\n" + "=" * 72)
     print("③ 验证：自定义 Transformer 的映射确实只来自训练折")

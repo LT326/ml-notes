@@ -14,6 +14,19 @@
     与 transform（全量映射）来天然防泄露。
 
 运行： python q4_encoding_comparison.py
+
+============================================================
+【阅读指南】本文件按“需掌握程度”做了三级标注：
+    ★★★ 必掌握   —— 数据处理核心考点，要能自己讲清原理
+    ★★  工程规范 —— 工程化的正确写法，重点理解“为什么”
+    ★   脚手架   —— 造数据、打印排版；读代码时可跳过
+
+本题的 ★★★ 必掌握清单：
+    1. 长尾类别列的三种处理：全部独热 / 合并稀有 / 目标编码，各自优缺点
+    2. 目标编码的平滑公式：(count*类别均值 + m*全局均值) / (count + m)
+    3. 目标编码必须 “平滑 + K 折交叉”，否则训练集虚高、测试集崩盘
+    4. 用到标签的编码步骤，整条链要放进 cross_val_score 里
+============================================================
 """
 
 from __future__ import annotations
@@ -36,9 +49,11 @@ RARE_THRESHOLD = 20
 SMOOTH_M = 30
 
 
-# --------------------------------------------------------------------------
-# 数据构造：长尾分布的城市列
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★ 脚手架（可跳过）：造一份“长尾城市列”的数据
+#   用幂律权重让少数城市占绝大多数样本，目的是复现业务里的长尾分布，
+#   好让下面的三种编码方式拉开差距。随机数公式本身不是知识点。
+# ==========================================================================
 def build_long_tail_data(n: int = N_SAMPLES, n_cities: int = N_CITIES) -> pd.DataFrame:
     """用幂律权重采样城市，使样本量分布严重长尾（少数城市占大多数样本）。"""
     cities = [f"城市{i:03d}" for i in range(n_cities)]
@@ -57,6 +72,10 @@ def build_long_tail_data(n: int = N_SAMPLES, n_cities: int = N_CITIES) -> pd.Dat
     return pd.DataFrame({"city": city, "target": y})
 
 
+# ★★★ 必掌握：稀有类别合并（长尾场景的标准操作）
+#   把出现次数 < threshold（本题 20）的类别统一归为“其他”，
+#   避免产生一大堆“只有 1~2 个样本”的独热列 —— 那种列学不到规律、只会加噪声。
+#   小提醒：合并阈值也应只看训练集来定，生产代码里要放进 Pipeline。
 def merge_rare_categories(df: pd.DataFrame, col: str, threshold: int) -> tuple[pd.DataFrame, int]:
     """把出现次数 < threshold 的类别合并为“其他”，返回新表与被合并的类别数。"""
     df = df.copy()
@@ -66,9 +85,21 @@ def merge_rare_categories(df: pd.DataFrame, col: str, threshold: int) -> tuple[p
     return df, len(rare)
 
 
-# --------------------------------------------------------------------------
-# ③ 自定义：K 折交叉 + 平滑 的目标编码 Transformer
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：目标编码（Target Encoding）的两个防泄露要点
+#   1) 平滑：编码值 = (count*类别均值 + m*全局均值) / (count + m)
+#      公式就在下面 _smooth_map 里，必须记住。
+#      m 越大，稀有类别越向全局均值收缩，避免“1~2 个样本的均值被当成规律”。
+#   2) K 折交叉：编码某一行时，只能用“它所在折之外”的标签来算均值，
+#      即 out-of-fold 编码 —— 否则等于把这一行自己的标签写进它自己的特征，
+#      就是最典型的“标签泄露”。
+#
+# ★★ 工程规范：继承 BaseEstimator + TransformerMixin，实现三个方法：
+#      fit           -> 学“全量映射”（供 transform 用），只接收折内数据
+#      fit_transform -> 返回 out-of-fold 编码（训练时走这里）
+#      transform     -> 查表编码，未见过的类别回退全局均值（预测时走这里）
+#   三者配合塞进 Pipeline 后，cross_val_score 会自动隔离各折，天然防泄露。
+# ==========================================================================
 class KFoldSmoothedTargetEncoder(BaseEstimator, TransformerMixin):
     """目标编码器（平滑 + K 折交叉），可安全放进 Pipeline / cross_val_score。
 
@@ -87,6 +118,7 @@ class KFoldSmoothedTargetEncoder(BaseEstimator, TransformerMixin):
 
     @staticmethod
     def _smooth_map(city: pd.Series, y: pd.Series, m: int) -> tuple[dict, float]:
+        # ★★★ 必掌握：平滑公式 —— 让样本少的类别向全局均值收缩，是目标编码的灵魂
         global_mean = float(y.mean())
         stat = pd.DataFrame({"city": city.values, "y": y.values}).groupby("city")["y"].agg(["mean", "count"])
         mapping = (stat["count"] * stat["mean"] + m * global_mean) / (stat["count"] + m)
@@ -124,6 +156,7 @@ class KFoldSmoothedTargetEncoder(BaseEstimator, TransformerMixin):
 # 评估
 # --------------------------------------------------------------------------
 def run_cv(name: str, pipe: Pipeline, df: pd.DataFrame) -> dict:
+    # ★ 脚手架：统一的“跑一次 5 折交叉验证 + 计时”封装，仅用于打分，可跳过
     X = df.drop(columns=["target"])
     y = df["target"].to_numpy()
     t0 = time.perf_counter()
@@ -132,6 +165,7 @@ def run_cv(name: str, pipe: Pipeline, df: pd.DataFrame) -> dict:
     return {"方案": name, "耗时(s)": round(elapsed, 3), "准确率均值": round(scores.mean(), 4), "标准差": round(scores.std(), 4), "列数": None}
 
 
+# ★ 脚手架：main 负责跑三种方案并打印对比表，流程可扫过；重点是结尾那段“结论”
 def main() -> None:
     df = build_long_tail_data()
     counts = df["city"].value_counts()
@@ -146,16 +180,17 @@ def main() -> None:
 
     clf = LogisticRegression(max_iter=2000)
 
-    # ① 全部独热
+    # ★★★ 必掌握：三种编码方式，注意“自定义编码器”放在 Pipeline 的什么位置
+    # ① 全部独热：100 个城市 -> 100 列；稀有类别的列在训练折内几乎全 0，学不到东西
     pipe1 = Pipeline([("ohe", OneHotEncoder(handle_unknown="ignore")), ("clf", clf)])
     res1 = run_cv("① 全部独热", pipe1, df)
 
-    # ② 合并稀有类别后独热
+    # ② 合并稀有类别后独热：先归并成“其他”再独热，维度大幅下降
     df2, n_rare = merge_rare_categories(df, "city", RARE_THRESHOLD)
     pipe2 = Pipeline([("ohe", OneHotEncoder(handle_unknown="ignore")), ("clf", clf)])
     res2 = run_cv("② 合并稀有(<20)后独热", pipe2, df2)
 
-    # ③ 平滑 + K 折交叉目标编码
+    # ③ 平滑 + K 折交叉目标编码：自定义 Transformer 放进 Pipeline，交给 CV 自动隔离
     pipe3 = Pipeline(
         [("te", KFoldSmoothedTargetEncoder(col="city", m=SMOOTH_M, n_splits=5, random_state=0)), ("clf", clf)]
     )

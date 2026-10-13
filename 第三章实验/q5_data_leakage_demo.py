@@ -14,6 +14,18 @@
   C. 标签泄露（用全量标签构造的特征）-> 错误做法准确率虚高到接近满分。
 
 运行： python q5_data_leakage_demo.py
+
+============================================================
+【阅读指南】本文件按“需掌握程度”做了三级标注：
+    ★★★ 必掌握   —— 本题核心：泄露的成因、后果与防止
+    ★   脚手架   —— 造数据、打印排版；读代码时可跳过
+
+本题的 ★★★ 必掌握清单：
+    1. “先划分、再一切含统计量的处理”是铁律；测试集只能 transform
+    2. 为什么低维时差距很小，而高维 / 测试集占比大时会被放大
+    3. 最危险的是“用全量标签构造特征”（标签泄露），准确率虚高到接近满分
+    4. 一句话总结：任何“学参数”的步骤，都不许看到测试集
+============================================================
 """
 
 from __future__ import annotations
@@ -28,6 +40,7 @@ from sklearn.preprocessing import StandardScaler
 SEED = 42
 
 
+# ★ 脚手架（可跳过）：训练模型、返回测试集准确率，只是个工具函数
 def fit_lr(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray, y_test: np.ndarray) -> float:
     """训练逻辑回归并返回测试集准确率。"""
     clf = LogisticRegression(max_iter=5000)
@@ -35,9 +48,15 @@ def fit_lr(X_train: np.ndarray, y_train: np.ndarray, X_test: np.ndarray, y_test:
     return float(clf.score(X_test, y_test))
 
 
-# --------------------------------------------------------------------------
-# A / B：缩放泄露（全量 fit vs 训练集 fit）
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：缩放泄露对照实验（本题主角）
+#   唯一的变量是“标准化用了谁的统计量”：
+#     ① 错误：在全量 X 上 fit_transform —— 测试集的 μ/σ 提前流进了训练特征；
+#     ② 正确：先划分，只在训练集 fit，测试集只 transform。
+#   结论要点：
+#     - 低维时差距只有千分之几（μ/σ 扰动小，且逻辑回归对平移缩放不敏感）；
+#     - 维度越高、测试集占比越大，泄露被累积放大（可达 2~5 个百分点）。
+# ==========================================================================
 def scale_leak_experiment(n_features: int, n_informative: int, tag: str, n_samples: int = 1000) -> None:
     n_redundant = min(50, max(0, n_features - n_informative))
     X, y = make_classification(
@@ -50,14 +69,14 @@ def scale_leak_experiment(n_features: int, n_informative: int, tag: str, n_sampl
         random_state=SEED,
     )
 
-    # ① 错误做法：先在全量数据上 fit 标准化（测试集的 μ/σ 信息流进了训练特征）
+    # ① 错误做法（要警惕）：先在全量数据上 fit 标准化，测试集的 μ/σ 已流入训练特征
     X_scaled_all = StandardScaler().fit_transform(X)
     Xw_tr, Xw_te, yw_tr, yw_te = train_test_split(
         X_scaled_all, y, test_size=0.3, random_state=SEED, stratify=y
     )
     acc_wrong = fit_lr(Xw_tr, yw_tr, Xw_te, yw_te)
 
-    # ② 正确做法：先划分，再只用训练集 fit 标准化，测试集只 transform
+    # ② 正确做法（★必掌握）：先划分，再只用训练集 fit 标准化，测试集只 transform
     X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=SEED, stratify=y)
     scaler = StandardScaler().fit(X_tr)
     acc_correct = fit_lr(scaler.transform(X_tr), y_tr, scaler.transform(X_te), y_te)
@@ -70,9 +89,13 @@ def scale_leak_experiment(n_features: int, n_informative: int, tag: str, n_sampl
     print(f"→ 错误做法虚高：{(acc_wrong - acc_correct) * 100:+.3f} 个百分点\n")
 
 
-# --------------------------------------------------------------------------
-# C：标签泄露（用全量标签构造目标编码特征）
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：标签泄露（最危险的一类泄露）
+#   用“全量标签”算目标编码，再划分训练/测试：
+#   等于把每一行自己的标签，通过编码值写回了它自己的特征里，模型直接看到答案。
+#   典型表现：验证/测试准确率虚高到接近满分，但线上真实效果只有随机水平。
+#   正确做法：先划分，映射只用训练集标签去算；测试集查表，未见类别回退全局均值。
+# ==========================================================================
 def label_leak_experiment(n: int = 600, n_categories: int = 300) -> None:
     rng = np.random.default_rng(SEED)
     cat = rng.choice([f"ID{i:03d}" for i in range(n_categories)], size=n)  # 每类约 2 个样本，泄露最强
@@ -103,6 +126,8 @@ def label_leak_experiment(n: int = 600, n_categories: int = 300) -> None:
     print("  （错误做法把每一行自己的标签写进了它自己的特征里，等于把答案喂给模型）\n")
 
 
+# ★ 脚手架：main 只是把 A/B/C 三个实验依次跑一遍，流程可跳过；
+#   结尾的“结论”部分是本题要记的核心知识，建议精读
 def main() -> None:
     print("=" * 72)
     print("数据泄露演示实验")

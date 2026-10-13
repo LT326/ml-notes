@@ -11,15 +11,14 @@ ML/
 ├── 第2章 机器学习专用数学基础.md
 ├── 第3章 机器学习工程环境与数据预处理.md
 ├── 第4章 线性回归与最小二乘法.md
-└── expert_level/                              # 第 3 章「精通级」习题代码
+└── 第三章实验/                                # 第 3 章「精通级」习题代码
     ├── q1_clean_split_scale.py                # 清洗 + 分层划分 + 标准化流水线
     ├── q2_standard_vs_minmax.py               # 标准化 vs 归一化分布对比
     ├── q3_breast_cancer_rfe.py                # 相关性筛选 + RFE + 交叉验证
     ├── q4_encoding_comparison.py              # 独热 / 合并稀有 / 目标编码对比
     ├── q5_data_leakage_demo.py                # 数据泄露演示实验
     ├── q6_column_transformer_pipeline.py      # ColumnTransformer + 自定义目标编码 Transformer
-    ├── q7_bank_income_mnar.py                 # 收入缺失（MNAR）处理方案
-    └── figures/                               # 脚本生成的图像
+    └── q7_bank_income_mnar.py                 # 收入缺失（MNAR）处理方案
 ```
 
 ## 环境准备
@@ -33,14 +32,16 @@ uv pip install -r requirements.txt
 
 ## 运行
 
-`expert_level/` 下的每个脚本都可独立运行，随机种子已固定，结果可复现：
+`第三章实验/` 下的每个脚本都可独立运行，随机种子已固定，结果可复现：
 
 ```powershell
-cd expert_level
+cd 第三章实验
 python q1_clean_split_scale.py
 ```
 
-`q2` 与 `q3` 会把图像保存到 `expert_level/figures/`。
+每个脚本顶部都有【阅读指南】，正文按 `★★★ 必掌握` / `★★ 工程规范` / `★ 脚手架` 三级标注，便于分清"该精读的"与"可跳过的"。
+
+`q2` 与 `q3` 运行后会把图像保存到 `第三章实验/figures/`。
 
 ## 第 3 章「精通级」习题要点
 

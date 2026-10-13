@@ -12,6 +12,19 @@
 
 运行： python q2_standard_vs_minmax.py
        图会保存到同目录 figures/ 下。
+
+============================================================
+【阅读指南】本文件按“需掌握程度”做了三级标注：
+    ★★★ 必掌握   —— 数据处理核心考点，要能自己讲清原理
+    ★★  工程规范 —— 工程化的正确写法，重点理解“为什么”
+    ★   脚手架   —— 造数据、画图、打印排版；读代码时可跳过
+
+本题的 ★★★ 必掌握清单：
+    1. 标准化公式：(x - 均值) / 标准差  → 均值 0、方差 1，范围不固定、会有负数
+    2. 归一化公式：(x - 最小值) / (最大值 - 最小值) → 严格落在 [0, 1]
+    3. 两者都是仿射变换、都是保序的：只平移+缩放，不改变分布形状（偏度不变）
+    4. 关键差异：归一化对极端值极其敏感 —— 一个 999 就把其余值全挤到 0 附近
+============================================================
 """
 
 from __future__ import annotations
@@ -36,6 +49,10 @@ OUT_DIR = Path(__file__).resolve().parent / "figures"
 OUT_DIR.mkdir(exist_ok=True)
 
 
+# ==========================================================================
+# ★ 脚手架（可跳过）：造一列右偏数据，并可选择注入一个极端值
+#   目的只是造出“有极端值 vs 没极端值”两种场景，供下面做对比。
+# ==========================================================================
 def make_column(n: int = 1000, with_outlier: bool = True) -> np.ndarray:
     """构造一列右偏数据，可选地注入一个极端值。"""
     col = RNG.lognormal(mean=3.0, sigma=0.6, size=n)
@@ -44,6 +61,7 @@ def make_column(n: int = 1000, with_outlier: bool = True) -> np.ndarray:
     return col
 
 
+# ★ 脚手架：把一小段数据的统计量整理成一行，仅用于打印，可跳过
 def describe(name: str, arr: np.ndarray) -> dict:
     return {
         "处理方式": name,
@@ -56,6 +74,9 @@ def describe(name: str, arr: np.ndarray) -> dict:
 
 
 def compare(original: np.ndarray, tag: str, slug: str) -> None:
+    # ★★★ 必掌握：这就是本题的核心两行 —— 两种缩放各自做了什么
+    #   StandardScaler：减均值、除标准差 → 均值 0、方差 1（有负数，范围不定）
+    #   MinMaxScaler  ：减最小值、除极差 → 压缩到 [0, 1]（对极端值极敏感）
     std = StandardScaler().fit_transform(original.reshape(-1, 1)).ravel()
     mmx = MinMaxScaler().fit_transform(original.reshape(-1, 1)).ravel()
 
@@ -75,6 +96,7 @@ def compare(original: np.ndarray, tag: str, slug: str) -> None:
         f"说明极端值把绝大多数正常样本挤在了低端。"
     )
 
+    # ★ 脚手架（可跳过）：下面整段只是画三张直方图做并排展示
     # 可视化
     fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
     for ax, data, title, color in zip(

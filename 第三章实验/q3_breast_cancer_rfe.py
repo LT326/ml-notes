@@ -15,6 +15,19 @@
   - 每个 k 的评估都重新 fit，避免复用同一份结果。
 
 运行： python q3_breast_cancer_rfe.py
+
+============================================================
+【阅读指南】本文件按“需掌握程度”做了三级标注：
+    ★★★ 必掌握   —— 数据处理核心考点，要能自己讲清原理
+    ★★  工程规范 —— 工程化的正确写法，重点理解“为什么”
+    ★   脚手架   —— 画图、打印排版；读代码时可跳过
+
+本题的 ★★★ 必掌握清单：
+    1. 相关矩阵用 np.triu(..., k=1) 取上三角，避免 A-B / B-A 重复计数
+    2. RFE 用到标签，必须放进 Pipeline / 交叉验证内部，否则造成“选择偏差”
+    3. 用交叉验证评估每个 k，且每个 k 都重新 fit，不复用旧结果
+    4. “特征数”的决策思路：选性价比拐点，而非分数最高的那个 k
+============================================================
 """
 
 from __future__ import annotations
@@ -44,9 +57,16 @@ OUT_DIR = Path(__file__).resolve().parent / "figures"
 OUT_DIR.mkdir(exist_ok=True)
 
 
-# --------------------------------------------------------------------------
-# ① 相关性筛选
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：相关性筛选
+#   - 计算相关矩阵，取绝对值
+#   - 关键技巧 np.triu(np.ones(...), k=1)：只保留“上三角”，
+#     避免 (A,B) 与 (B,A) 这对重复计数
+#   - 对每一对高相关特征“留一删一”，本题保留先出现的那一列
+#   - 小提醒：相关性筛选只用 X、不用标签，通常允许在划分前做；
+#     但它仍用到了全体样本的分布，严格工程上更稳妥的做法同样是放进 Pipeline。
+#     （本题的 RFE 就是示范：见下方）
+# ==========================================================================
 def drop_highly_correlated(X: pd.DataFrame, threshold: float = CORR_THRESHOLD) -> tuple[pd.DataFrame, list[str]]:
     """删除相关性 > threshold 的冗余特征：对每一对高相关特征，保留先出现的一列。"""
     corr = X.corr().abs()
@@ -72,9 +92,14 @@ def drop_highly_correlated(X: pd.DataFrame, threshold: float = CORR_THRESHOLD) -
     return X.drop(columns=to_drop), to_drop
 
 
-# --------------------------------------------------------------------------
-# ② RFE + 5 折交叉验证
-# --------------------------------------------------------------------------
+# ==========================================================================
+# ★★★ 必掌握：RFE（递归特征消除）必须放进 Pipeline / 交叉验证内部
+#   - RFE 用到了标签，属于“有监督的特征选择”；
+#   - 如果先用全量数据选出特征、再拿这份结果去做交叉验证，
+#     等于测试折的信息也参与了选特征 → 这叫“选择偏差”，也是一种泄露；
+#   - 正确做法：把 RFE 作为 Pipeline 的一步，CV 会在每个训练折内重新选一次。
+# ★★ 工程规范：Pipeline 把“缩放 -> 选特征 -> 分类”串成一条链，一次 fit 全部到位。
+# ==========================================================================
 def build_rfe_pipeline(n_features: int) -> Pipeline:
     """RFE 放进 Pipeline：交叉验证时会在每个训练折内重新做特征选择，杜绝选择偏差。"""
     return Pipeline(
@@ -86,6 +111,7 @@ def build_rfe_pipeline(n_features: int) -> Pipeline:
     )
 
 
+# ★★★ 必掌握：用 cross_val_score 评估每个 k；每个 k 都重新 fit，绝不复用旧结果
 def evaluate_k(X: pd.DataFrame, y: np.ndarray, k_values: list[int]) -> pd.DataFrame:
     n_available = X.shape[1]
     rows = []
@@ -103,6 +129,7 @@ def evaluate_k(X: pd.DataFrame, y: np.ndarray, k_values: list[int]) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
+# ★ 脚手架（可跳过）：把“特征数 - 准确率”画成曲线，仅用于展示
 def plot_curve(result: pd.DataFrame) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.errorbar(
@@ -124,6 +151,8 @@ def plot_curve(result: pd.DataFrame) -> None:
     print(f"\n已保存曲线图 -> {out}")
 
 
+# ★ 脚手架：main 负责加载数据、串联 ①②③ 并打印结论，流程可快速扫过
+#   真正要记的是 ③ 里的“怎么选 k”
 def main() -> None:
     data = load_breast_cancer()
     X = pd.DataFrame(data.data, columns=data.feature_names)
@@ -154,6 +183,7 @@ def main() -> None:
         f"之后趋于平台甚至轻微回落。"
     )
 
+    # ★★★ 必掌握：怎么做“特征数”决策 —— 不是选分数最高的，而是选“性价比拐点”
     # ③ 决策
     print("\n" + "=" * 72)
     print("③ 最终特征数决策")
